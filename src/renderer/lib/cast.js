@@ -13,6 +13,8 @@ module.exports = {
   setRate
 }
 
+const http = require('http')
+
 const config = require('../../config')
 const {CastingError} = require('./errors')
 
@@ -131,22 +133,49 @@ function chromecastPlayer () {
   }
 
   function open () {
-    const torrentSummary = state.saved.torrents.find((x) => x.infoHash === state.playing.infoHash)
-    ret.device.play(state.server.networkURL + '/' + state.playing.fileIndex, {
-      type: 'video/mp4',
-      title: config.APP_NAME + ' - ' + torrentSummary.name
-    }, function (err) {
-      if (err) {
-        state.playing.location = 'local'
-        state.errors.push({
-          time: new Date().getTime(),
-          message: 'Could not connect to Chromecast. ' + err.message
+    const torrentSummary = state.saved.torrents.find((x) => x.infoHash === state.playing.infoHash) || {}
+    const subtitles = state.playing.subtitles
+    const selectedSubtitle = subtitles.tracks[subtitles.selectedIndex]
+    if (!selectedSubtitle) {
+      cast()
+    } else {
+      const subServer = http.createServer((req, res) => {
+        if (!selectedSubtitle) {
+          res.writeHead(400, {'Content-Type': 'text/html'})
+          return res.end('No subtitles selected')
+        }
+        res.writeHead(200, {
+          'Content-Type': 'text/vtt;charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+          'Transfer-Encoding': 'chunked'
         })
-      } else {
-        state.playing.location = 'chromecast'
-      }
-      update()
-    })
+        res.end(Buffer.from(selectedSubtitle.buffer.substr(21), 'base64'))
+      }).listen(0, function () {
+        const port = subServer.address().port
+        const subtitlesUrl = 'http://' + state.server.networkAddress + ':' + port + '/'
+        cast([subtitlesUrl])
+      })
+    }
+
+    function cast (subtitles) {
+      ret.device.play(state.server.networkURL + '/' + state.playing.fileIndex, {
+        type: 'video/mp4',
+        title: config.APP_NAME + ' - ' + torrentSummary.name,
+        subtitles: subtitles,
+        autoSubtitles: !!subtitles
+      }, function (err) {
+        if (err) {
+          state.playing.location = 'local'
+          state.errors.push({
+            time: new Date().getTime(),
+            message: 'Could not connect to Chromecast. ' + err.message
+          })
+        } else {
+          state.playing.location = 'chromecast'
+        }
+        update()
+      })
+    }
   }
 
   function play (callback) {
